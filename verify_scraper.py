@@ -11,8 +11,9 @@ from bs4 import BeautifulSoup
 from app.scraper import (
     extract_products_from_soup,
     fetch_product_details,
-    fetch_with_playwright,
+    fetch_with_scrapling,
 )
+from app.llm_processor import sanitize_product_data
 
 def test():
     """Run verification test for the scraper."""
@@ -22,7 +23,7 @@ def test():
         url = f"https://www.amazon.in/s?k={keyword.replace(' ', '+')}"
 
         print(f"1. Fetching search results for '{keyword}'...")
-        html = fetch_with_playwright(url, wait_sec=5)
+        html = fetch_with_scrapling(url, wait_sec=5)
         if not html:
             print("❌ Failed to fetch search results.")
             return
@@ -42,7 +43,11 @@ def test():
 
         if p_url:
             full_p = fetch_product_details(p_url, p)
-            print("\n--- EXTRACTED FIELDS ---")
+            
+            print("\n3. Testing Gemini Sanitization...")
+            sanitized_p = sanitize_product_data(full_p.copy())
+            
+            print("\n--- EXTRACTED & SANITIZED FIELDS ---")
             fields_to_check = [
                 'Product Name',
                 'Brand',
@@ -51,10 +56,15 @@ def test():
                 'Discount Base Price',
                 'Weight',
                 'SKU',
+                'Model Number',
                 'Main Image',
+                'Detailed Description',
             ]
             for k in fields_to_check:
-                print(f"{k:20}: {full_p.get(k, 'N/A')}")
+                val = str(full_p.get(k, 'N/A'))
+                if k == 'Detailed Description':
+                    val = val[:100] + "..." if len(val) > 100 else val
+                print(f"{k:20}: {val}")
 
             if full_p.get('SKU') or full_p.get('Manufacturer'):
                 print("\n✨ VERIFICATION PASSED: Deep fields captured.")

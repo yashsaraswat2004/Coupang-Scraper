@@ -8,7 +8,7 @@ A web-based scraper that extracts product data from any e-commerce website and e
 scraper/
 ├── app/
 │   ├── __init__.py         # Flask app initialization
-│   ├── scraper.py          # Core scraping engine (Playwright)
+│   ├── scraper.py          # Core scraping engine (Scrapling)
 │   ├── excel_utils.py      # Excel export utilities
 │   ├── helpers.py          # Helper functions
 │   ├── routes.py           # API endpoints
@@ -45,10 +45,6 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Install Playwright browser
-```bash
-python -m playwright install chromium
-```
 
 ### 5. Start the server
 ```bash
@@ -62,15 +58,7 @@ http://localhost:5055
 
 ## 🌐 Supported Websites
 - Amazon.in / Amazon.com
-- Flipkart
-- Nykaa
-- Meesho
-- Snapdeal
-- Ajio
-- Myntra
-- eBay
-- Walmart
-- Any generic e-commerce site
+- Any Amazon regional site
 
 ## 📊 Output CSV Template (23 Columns)
 
@@ -122,17 +110,14 @@ POST /api/scrape
 - Output Excel files are saved to `outputs/` folder
 - Max 500 products per scrape
 - Polite delay (1.5–3s) between page requests
-- Uses Playwright for JavaScript rendering support
+- Uses Scrapling for stealthy scraping and JavaScript support
 - Automatically skips sponsored/ad products
 - Deep scrapes product detail pages (PDP) for additional info
 
 ## 🔧 Troubleshooting
 
-### "Playwright / Chromium could not load the page"
-Run the following command to install the browser:
-```bash
-python -m playwright install chromium
-```
+### "Scrapling could not load the page"
+Check your internet connection or if the site is blocking access. Scrapling handles most anti-bot measures automatically.
 
 ### Module not found errors
 Make sure all dependencies are installed:

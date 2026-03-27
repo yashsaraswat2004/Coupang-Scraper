@@ -10,55 +10,28 @@ from bs4 import BeautifulSoup
 
 from .helpers import clean_text, extract_price, build_search_url
 from .excel_utils import build_excel
+from .llm_processor import sanitize_product_data
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PLAYWRIGHT FETCH  (real browser — handles JS + most bot-checks)
+# SCrapling FETCH (Stealthy, handles JS + bot-checks)
 # ─────────────────────────────────────────────────────────────────────────────
-def fetch_with_playwright(url, wait_sec=4):
+def fetch_with_scrapling(url, wait_sec=3):
     try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    '--no-sandbox',
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-dev-shm-usage',
-                    '--window-size=1366,768',
-                ]
-            )
-            ctx = browser.new_context(
-                viewport={'width': 1366, 'height': 768},
-                user_agent=(
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/122.0.0.0 Safari/537.36'
-                ),
-                locale='en-IN',
-                timezone_id='Asia/Kolkata',
-                extra_http_headers={
-                    'Accept-Language': 'en-IN,en;q=0.9',
-                    'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
-                }
-            )
-            # Hide webdriver flag
-            ctx.add_init_script("""
-                Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
-                window.chrome={runtime:{}};
-                Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3]});
-                Object.defineProperty(navigator,'languages',{get:()=>['en-IN','en']});
-            """)
-            pg = ctx.new_page()
-            pg.goto(url, wait_until='domcontentloaded', timeout=35000)
-            pg.wait_for_timeout(wait_sec * 1000)
-            # Scroll to trigger lazy-loads
-            pg.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.6)")
-            pg.wait_for_timeout(1500)
-            html = pg.content()
-            browser.close()
-            return html
+        from scrapling import StealthyFetcher
+        log_msg = f"Fetching with Scrapling: {url}"
+        print(log_msg)
+        
+        # Initialize the fetcher with stealth settings
+        fetcher = StealthyFetcher()
+        # Scrapling handles viewport, UA, and other headers automatically with StealthyFetcher
+        response = fetcher.fetch(url)
+        
+        if response.status != 200:
+            print(f"[Scrapling] Non-200 status code: {response.status}")
+        
+        return response.body
     except Exception as e:
-        print(f"[Playwright] Error: {e}")
+        print(f"[Scrapling] Error: {e}")
         return None
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,75 +42,19 @@ PLATFORM_SELECTORS = {
         'div[data-component-type="s-search-result"]',
         'div[data-asin]',
     ],
-    'flipkart': [
-        'div._1AtVbE',
-        'div._13oc-S',
-        'div.tUxRFH',
-        'div._2kHMtA',
-    ],
-    'nykaa': [
-        'div.product-list__item',
-        'div[class*="productCard"]',
-        'div.css-16y7hct',
-    ],
-    'meesho': [
-        'div[class*="ProductCard"]',
-    ],
-    'snapdeal': [
-        'li.product-tuple-listing',
-    ],
-    'ajio': [
-        'div[class*="rilrtl-products-list__item"]',
-        'article[class*="product"]',
-    ],
-    'ebay': [
-        'li.s-item',
-        'div.s-item__wrapper',
-    ],
-    'walmart': [
-        'div[data-item-id]',
-    ],
-    'myntra': [
-        'li.product-base',
-        'div[class*="product-productMetaInfo"]',
-    ],
 }
 
 GENERIC_SELECTORS = [
     '[class*="product-card"]',
-    '[class*="product-item"]',
-    '[class*="product-tile"]',
-    '[class*="ProductCard"]',
-    '[class*="item-card"]',
-    '[class*="search-result"]',
-    '[class*="listing-item"]',
-    '[class*="product_card"]',
-    '[class*="goods-item"]',
-    '[data-testid*="product"]',
     'li[class*="product"]',
 ]
 
 
 def get_selectors_for_url(url):
-    """Get ordered list of selectors based on URL domain."""
-    url_lower = url.lower()
-    selectors = []
-    
-    # Add platform-specific selectors first
-    for platform, platform_sels in PLATFORM_SELECTORS.items():
-        if platform in url_lower:
-            selectors.extend(platform_sels)
-            break
-    
-    # Add all other platform selectors
-    for platform, platform_sels in PLATFORM_SELECTORS.items():
-        if platform not in url_lower:
-            selectors.extend(platform_sels)
-    
-    # Add generic selectors last
-    selectors.extend(GENERIC_SELECTORS)
-    
-    return selectors
+    """Get selectors specifically for Amazon or fallback."""
+    if 'amazon' in url.lower():
+        return PLATFORM_SELECTORS['amazon'] + GENERIC_SELECTORS
+    return GENERIC_SELECTORS
 
 def extract_products_from_soup(soup, base_url):
     """Extract product containers from page HTML."""
@@ -247,7 +164,7 @@ def extract_single_product(c, base_url):
 
     # Extract Sale Price
     price = _pick(c, [
-        'span.a-price-whole', 'span.a-offscreen',
+        'span.a-offscreen', 'span.a-price-whole',
         '._30jeq3', '._1_WHN1', '._16Jk6d',
         '[class*="selling-price"]', '[class*="sale-price"]', '[class*="current-price"]',
         '[class*="offer-price"]', '[class*="discounted"]',
@@ -304,33 +221,112 @@ def extract_single_product(c, base_url):
 
 def fetch_product_details(url, existing_p):
     """Visits the Product Detail Page (PDP) to extract deep information."""
-    html = fetch_with_playwright(url, wait_sec=2)
+    html = fetch_with_scrapling(url, wait_sec=2)
     if not html:
         return existing_p
 
     soup = BeautifulSoup(html, 'lxml')
     p = existing_p.copy()
 
-    # Extract Detailed Description
-    desc_el = soup.select_one(
-        '#feature-bullets, #productDescription, '
-        '[class*="description"], [class*="Description"]'
-    )
-    if desc_el:
-        p['Detailed Description'] = clean_text(desc_el.get_text())[:2000]
+    # 1. Extract Detailed Description (Prioritize "About this item" / feature bullets)
+    about_item = soup.select_one('#feature-bullets')
+    if about_item:
+        p['Detailed Description'] = clean_text(about_item.get_text())[:2000]
+    else:
+        desc_el = soup.select_one(
+            '#productDescription, [class*="description"], [class*="Description"]'
+        )
+        if desc_el:
+            p['Detailed Description'] = clean_text(desc_el.get_text())[:2000]
 
-    # Extract Manufacturer / Brand Details
-    manu = soup.select_one(
-        'a#bylineInfo, #detailBullets_feature_div, '
-        '[class*="manufacturer"], [class*="Manufacturer"]'
-    )
-    if manu:
-        txt = clean_text(manu.get_text())
-        if 'brand' in txt.lower() or 'visit the' in txt.lower():
-            p['Brand'] = txt.replace('Visit the ', '').replace(' Store', '').strip()[:80]
-        p['Manufacturer'] = txt[:120]
+    # 2. Extract Technical Specs / Item Details (Brand, Manufacturer, ASIN)
+    spec_data = {}
+    
+    # Try multiple common table/list structures for product details
+    potential_containers = [
+        '#productDetails_db_sections',
+        '#productDetails_techSpec_section_1',
+        'table[id*="productDetails"]',
+        '#detailBullets_feature_div',
+        '.a-expander-content',
+        '#itemDetails',
+        '.prodDetSectionEntry'
+    ]
+    
+    for container_sel in potential_containers:
+        container = soup.select_one(container_sel)
+        if not container:
+            continue
+            
+        # Case A: Table rows
+        for row in container.select('tr'):
+            th = row.select_one('th, td.label, .a-color-secondary, span.a-text-bold')
+            td = row.select_one('td, td.value, .a-size-base, span:not(.a-text-bold)')
+            if th and td:
+                key = clean_text(th.get_text()).strip(': ').lower()
+                val = clean_text(td.get_text(separator=' ')).strip()
+                if key and val:
+                    spec_data[key] = val
+                    
+        # Case B: List items (bullets)
+        for li in container.select('li, .a-list-item'):
+            # Some Amazon pages have labels in bold spans
+            bold_span = li.select_one('span.a-text-bold')
+            if bold_span:
+                key_text = bold_span.get_text(separator=' ')
+                key = clean_text(key_text).strip(': ').lower()
+                # Use separator here too
+                val = clean_text(li.get_text(separator=' ').replace(key_text, '', 1)).strip(': ')
+                if key and val:
+                    spec_data[key] = val
+            else:
+                text = clean_text(li.get_text(separator=' '))
+                if ':' in text:
+                    parts = text.split(':', 1)
+                    if len(parts) == 2:
+                        key = parts[0].strip().lower()
+                        val = parts[1].strip()
+                        if key and val:
+                            spec_data[key] = val
+                    
+        # Case C: Generic rows (divs)
+        for row in container.select('.a-row'):
+            text = clean_text(row.get_text())
+            if ':' in text:
+                parts = text.split(':', 1)
+                key = parts[0].strip().lower()
+                val = parts[1].strip()
+                if key and val:
+                    spec_data[key] = val
 
-    # Extract Additional Images
+    # Map discovered specs to our fields
+    key_map = {
+        'brand': 'Brand',
+        'manufacturer': 'Manufacturer',
+        'asin': 'SKU',
+        'item model number': 'Model Number',
+        'manufacturer part number': 'Model Number',
+        'model number': 'Model Number',
+    }
+    
+    for k, field in key_map.items():
+        # 1. Try exact match first
+        if k in spec_data and spec_data[k]:
+            p[field] = spec_data[k]
+        else:
+            # 2. Fallback to partial match
+            for spec_key, spec_val in spec_data.items():
+                if k in spec_key and spec_val:
+                    p[field] = spec_val
+                    break
+    
+    # Ensure SKU and Model Number are identical (User Requirement)
+    if p.get('SKU'):
+        p['Model Number'] = p['SKU']
+    elif p.get('Model Number'):
+        p['SKU'] = p['Model Number']
+
+    # 3. Extract Additional Images
     add_images = []
     for img in soup.select('#altImages img, .imageThumbnail img, [class*="thumbnail"] img'):
         src = img.get('src') or img.get('data-src') or ''
@@ -345,11 +341,12 @@ def fetch_product_details(url, existing_p):
     if len(add_images) > 1:
         p['Additional Image 2'] = add_images[1]
 
-    # Extract SKU / Model Number (Amazon ASIN)
-    asin_m = re.search(r'/dp/([A-Z0-9]{10})', url)
-    if asin_m:
-        p['SKU'] = asin_m.group(1)
-        p['Model Number'] = f"{p['SKU']}-1"
+    # Extract SKU / Model Number (Amazon ASIN) from URL if not found in specs
+    if not p.get('SKU'):
+        asin_m = re.search(r'/dp/([A-Z0-9]{10})', url)
+        if asin_m:
+            p['SKU'] = asin_m.group(1)
+            p['Model Number'] = p['SKU']
 
     # Extract Volume / Weight from specs
     specs = soup.get_text()
@@ -390,18 +387,17 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
 
         log(f"🌐 Site   : {base_url}")
         log(f"🔑 Keyword: '{keyword}'  |  Max: {max_products}")
-        log("🚀 Launching Chromium browser...")
+        log("🚀 Launching Scrapling fetcher...")
 
         while len(all_products) < max_products:
             url = build_search_url(base_url, keyword, page)
             log(f"📄 Fetching page {page} …")
 
-            html = fetch_with_playwright(url, wait_sec=5)
+            html = fetch_with_scrapling(url, wait_sec=5)
 
             if not html:
-                msg = ("Playwright / Chromium could not load the page.\n"
-                       "Run this command once to install the browser:\n"
-                       "  playwright install chromium")
+                msg = ("Scrapling could not load the page.\n"
+                       "Check your internet connection or if the site is blocking access.")
                 log(f"❌ {msg}", 'error')
                 job['status'] = 'error'; job['error'] = msg; return
 
@@ -439,6 +435,11 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
                     pname = prod.get('Product Name', 'Unknown Product')
                     log(f"🔎 Deep scraping: {pname[:40]}...")
                     prod = fetch_product_details(product_url, prod)
+                    
+                    # Gemini LLM Sanitization
+                    log(f"✨ Sanitizing with Gemini: {pname[:30]}...")
+                    prod = sanitize_product_data(prod)
+                    
                     time.sleep(random.uniform(1.2, 2.5))
 
                 # Remove internal field before adding to results
